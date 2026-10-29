@@ -8,21 +8,24 @@ import { resolveProjectCanvasStyle } from "@/components/canvas/canvas-style-pick
 import { refreshCanvasCharacterReferenceNodes } from "@/lib/canvas/canvas-character-reference";
 import { canvasAssetHandoffIds, consumeCanvasAssetHandoff } from "@/lib/canvas/canvas-asset-handoff";
 import { createCanvasNode } from "@/lib/canvas/canvas-project-domain";
-import { isUserScopeAbandonedError } from "@/lib/user-scope-guard";
+import { generationTaskMetadata } from "@/lib/canvas/canvas-project-generation";
+import { explainGenerationError } from "@/lib/generation-error";
+import { captureUserScope, isUserScopeAbandonedError } from "@/lib/user-scope-guard";
 import { createStyleProfileSnapshot, resolveStyleProfile, serializeStyleProfile } from "@/lib/canvas/style-profile";
 import { getProject } from "@/services/api/projects";
-import { queryGenerationTask, retryGenerationTask, type GenerationTask } from "@/services/api/task-center";
+import { queryGenerationTask, retryGenerationTask, waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
 import { loadAssetsForUse } from "@/services/local-workspace-sync";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
 import { persistCanvasDocument } from "@/services/local-workspace-repository";
+import { recoverCanvasGenerationTask } from "@/services/canvas-generation-recovery";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import type { Asset } from "@/stores/use-asset-store";
 import { CanvasNodeType, type CanvasNodeData, type Position } from "@/types/canvas";
 
 import { readOwnedCanvasNodes, runOwnedCanvasEnsureQueue, runOwnedCanvasPageCommit, useCanvasOwnerLifetime } from "./canvas-owner-epoch";
 import { applyArchivedCanvasNodeAssets, CANVAS_HANDOFF_PERSIST_FAILED_MESSAGE, commitOwnedCanvasAssetHandoff, rebaseCreatedCanvasNodes } from "./canvas-resource-handoff-commit";
-import { canvasGenerationFailureMetadata } from "./canvas-generation-failure";
+import { canvasGenerationFailureMetadata, canvasGenerationTaskNodes } from "./canvas-generation-failure";
 import { linkedFolderPresentation, planCanvasHandoffEffect, resolveCanvasAssetHandoffPlan } from "./canvas-resource-handoff-plan";
 
 const NODE_STATUS_SUCCESS = "success" as const;
@@ -64,6 +67,7 @@ export function useCanvasResourceHandoff({
     const assetHandoffRef = useRef("");
     const handoffOwnershipRef = useRef<string | null>(null);
     const failedAttemptRef = useRef("");
+    const recoveringNodes = useRef(new Set<string>());
     const nonceAtFailRef = useRef(0);
     const [handoffRetryNonce, setHandoffRetryNonce] = useState(0);
     const projectIdRef = useRef(projectId);
@@ -296,39 +300,77 @@ export function useCanvasResourceHandoff({
     const reloadCanvasNodeResource = useCallback(
         async (node: CanvasNodeData) => {
             const taskId = node.metadata?.taskId;
-            if (!taskId || !node.metadata?.resourceReloadAvailable) return;
+            if (!taskId || recoveringNodes.current.has(node.id)) return;
+            recoveringNodes.current.add(node.id);
+            const refreshingTask = !node.metadata?.resourceReloadAvailable;
             const owner = lifetime.capture(projectId);
+            const expectedScope = captureUserScope();
             const targetNodeId = node.id;
             // 继续取回登记为画布上的进行中请求：切换画布、同一节点上发起新请求时随之取消。
             const controller = startGenerationRequest(targetNodeId, targetNodeId, targetNodeId);
-            const isCurrent = () => lifetime.matches(owner, projectIdRef.current) && !controller.signal.aborted;
+            const isCurrent = () => lifetime.matches(owner, projectIdRef.current) && !controller.signal.aborted
+                && nodesRef.current.some((item) => item.id === targetNodeId && item.metadata?.taskId === taskId);
             // 继续取回只等待并绑定原任务已生成的结果，不会重新提交生成。
             // 等待期间节点显示取回进度；失败后仍保留「继续取回」。
             setNodes((current) =>
-                current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "loading", errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined } } : item)),
+                current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "loading", ...(refreshingTask ? { taskStage: "正在查询原任务", taskStatus: "running", taskProgress: undefined } : {}), errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined } } : item)),
             );
+            let confirmedTask: GenerationTask | undefined;
             try {
-                let task = await queryGenerationTask(taskId, { signal: controller.signal });
+                let task = refreshingTask
+                    ? await recoverCanvasGenerationTask(taskId, controller.signal)
+                    : await queryGenerationTask(taskId, { signal: controller.signal, expectedScope });
                 if (!isCurrent()) return;
+                confirmedTask = task;
+                if (refreshingTask && (task.status === "running" || task.status === "queued")) {
+                    const onTaskUpdate = (update: GenerationTask) => {
+                        if (!isCurrent()) return;
+                        confirmedTask = update;
+                        setNodes((current) => canvasGenerationTaskNodes(current, targetNodeId, update));
+                    };
+                    onTaskUpdate(task);
+                    message.info("原任务仍在执行，正在等待原结果");
+                    try {
+                        task = await waitForGenerationTask(taskId, { signal: controller.signal, expectedScope, initialTask: task, onTaskUpdate });
+                    } catch (error) {
+                        if (confirmedTask.status !== "failed" && confirmedTask.status !== "cancelled") throw error;
+                        task = confirmedTask;
+                    }
+                    if (!isCurrent()) return;
+                    confirmedTask = task;
+                }
+                if (refreshingTask && task.status !== "succeeded") {
+                    setNodes((current) => canvasGenerationTaskNodes(current, targetNodeId, task));
+                    const uncertain = explainGenerationError({ code: task.errorCode, message: task.error }, { stage: task.stage }).uncertain;
+                    message.info(uncertain ? "原任务结果仍待确认，已保留当前节点，请稍后查询" : task.status === "running" || task.status === "queued" ? "原任务仍在执行，将继续在当前节点显示进度" : "已更新原任务状态，请在当前节点按提示处理");
+                    return;
+                }
                 if (task.status !== "succeeded") throw new Error("原生成任务尚未成功，暂时无法取回结果");
                 if (task.stage === "delivery_paused" || task.stage === "delivery_timed_out") {
-                    task = await retryGenerationTask(taskId);
+                    task = await retryGenerationTask(taskId, { signal: controller.signal, expectedScope });
                     if (!isCurrent()) return;
                 }
-                await applyGenerationTaskResult(targetNodeId, task, () => !controller.signal.aborted);
+                setNodes((current) => current.map((item) => item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, ...generationTaskMetadata(task) } } : item));
+                await applyGenerationTaskResult(targetNodeId, task, isCurrent);
             } catch (error) {
                 if (!isCurrent()) return;
                 if (isUserScopeAbandonedError(error) || (error instanceof Error && error.name === "AbortError")) return;
+                if (refreshingTask && confirmedTask?.status !== "succeeded") {
+                    setNodes((current) => current.map((item) => item.id === targetNodeId && item.metadata?.status === "loading" ? { ...item, metadata: { ...item.metadata, status: "error", taskStage: node.metadata?.taskStage, taskStatus: node.metadata?.taskStatus, taskProgress: node.metadata?.taskProgress, errorDetails: node.metadata?.errorDetails, generationErrorCode: node.metadata?.generationErrorCode, resourceReloadAvailable: node.metadata?.resourceReloadAvailable } } : item));
+                    message.error(error instanceof Error ? error.message : "查询原任务失败，请稍后重试");
+                    return;
+                }
                 const failure = canvasGenerationFailureMetadata(error, { prompt: node.metadata?.prompt || "" });
                 setNodes((current) =>
                     current.map((item) => (item.id === targetNodeId ? { ...item, metadata: { ...item.metadata, status: "error", ...failure, resourceReloadAvailable: failure.generationErrorCode !== "result_target_unavailable" } } : item)),
                 );
                 message.error(failure.errorDetails || "继续取回失败，请稍后重试");
             } finally {
+                recoveringNodes.current.delete(targetNodeId);
                 finishGenerationRequest(targetNodeId, controller);
             }
         },
-        [applyGenerationTaskResult, finishGenerationRequest, lifetime, message, projectId, setNodes, startGenerationRequest],
+        [applyGenerationTaskResult, finishGenerationRequest, lifetime, message, nodesRef, projectId, setNodes, startGenerationRequest],
     );
 
     return {

@@ -231,7 +231,7 @@ function ErrorContent({ node, theme, onRetry, onReloadResource, onOpenTaskDetail
                     retryLabel={upscaleAction ? node.metadata?.taskId ? "取回原结果" : "重试未提交项" : explanation.category === "result_target_unavailable" ? "生成历史" : localDepthAction && node.metadata?.taskStatus === "succeeded" ? "恢复结果" : node.metadata?.isBatchRoot ? "重新生成失败项" : "重新生成"}
                 />
             </div>
-            {node.metadata?.resourceReloadAvailable ? (
+            {(node.metadata?.resourceReloadAvailable || (submissionUncertain && node.metadata?.taskId && !localDepthAction && !upscaleAction)) && onReloadResource ? (
                 <button
                     type="button"
                     className="inline-flex h-8 items-center gap-1.5 rounded-[var(--r-md)] px-3 text-xs font-medium transition-colors"
@@ -240,7 +240,7 @@ function ErrorContent({ node, theme, onRetry, onReloadResource, onOpenTaskDetail
                     onMouseDown={(event) => event.stopPropagation()}
                 >
                     <Download className="size-3.5" />
-                    继续取回
+                    {node.metadata?.resourceReloadAvailable ? "继续取回" : "查询并恢复"}
                 </button>
             ) : null}
         </div>

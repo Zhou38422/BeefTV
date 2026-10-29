@@ -347,8 +347,8 @@ export function cancelGenerationTask(id: string, expectedScope = captureUserScop
     });
 }
 
-export function queryFailedVideoProviderTask(id: string) {
-    return http.post<ProviderTaskQueryResult>(`/tasks/${encodeURIComponent(id)}/query-provider`);
+export function queryFailedVideoProviderTask(id: string, config?: HttpRequestConfig) {
+    return http.post<ProviderTaskQueryResult>(`/tasks/${encodeURIComponent(id)}/query-provider`, undefined, config);
 }
 
 export function canRetrieveVideoResult(task: GenerationTask) {

@@ -47,11 +47,15 @@ bun run lint
 
 ## 截图
 
-截图由测试生成到仓库根目录的 `output/canvas-node-recovery/`，该目录由 Git 忽略。以下三张画布截图随评审记录保存，完整截图可运行上述用例生成。
+截图由测试生成到仓库根目录的 `output/canvas-node-recovery/`，该目录由 Git 忽略。以下六张画布截图随评审记录保存，完整截图可运行上述用例生成。
 
 | 待确认 | 查询原任务 | 恢复成功 |
 | --- | --- | --- |
 | ![待确认](dark-01-uncertain.png) | ![查询原任务](dark-02-querying.png) | ![恢复成功](dark-04-recovered.png) |
+
+| 原任务生成中 | 查询失败 | 结果回写失败 |
+| --- | --- | --- |
+| ![原任务生成中](dark-03-generating.png) | ![查询失败](dark-07-query-failed.png) | ![结果回写失败](dark-08-apply-failed.png) |
 
 | 文件 | 状态 |
 | --- | --- |

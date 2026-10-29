@@ -35,7 +35,7 @@ async function screenshot(name: string) {
     await page.screenshot({ path: resolve(shots, name), fullPage: true, animations: "disabled" });
 }
 async function open(theme = "light") {
-    await page.goto(`${origin}/__recovery?theme=${theme}`);
+    await page.goto(`${origin}/__recovery?theme=${theme}`, { waitUntil: "domcontentloaded" });
     await page.getByTestId("harness").waitFor();
     await page.getByRole("button", { name: "查询并恢复" }).waitFor();
 }

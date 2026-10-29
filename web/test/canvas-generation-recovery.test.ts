@@ -8,38 +8,50 @@ const uncertain = { id: "original", type: "canvas_video", status: "failed", stag
 
 test("uncertain video queries its existing upstream task and returns the original task's result", async () => {
     const completed = { ...uncertain, status: "succeeded" as const, stage: "completed", errorCode: undefined };
-    const queryFailedVideoProviderTask = mock(async () => ({ task: completed, providerStatus: "succeeded", recovered: true }));
+    const recoverTask = mock(async () => completed);
     const controller = new AbortController();
     const result = await recoverCanvasGenerationTask(uncertain.id, controller.signal, {
         queryGenerationTask: async () => uncertain,
-        queryFailedVideoProviderTask,
+        recoverTask,
     });
     expect(result).toBe(completed);
-    expect(queryFailedVideoProviderTask.mock.calls[0]?.[0]).toBe(uncertain.id);
-    expect(queryFailedVideoProviderTask.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal, timeout: 0 });
-    expect(queryFailedVideoProviderTask.mock.calls[0]?.[1]).toHaveProperty("expectedScope");
+    expect(recoverTask.mock.calls[0]?.[0]).toBe(uncertain.id);
+    expect(recoverTask.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
+    expect(recoverTask.mock.calls[0]?.[1]).toHaveProperty("expectedScope");
 });
 
-test("confirmed failures, active tasks and missing upstream IDs only refresh local state", async () => {
+test("confirmed outcomes and active tasks only refresh local state", async () => {
     for (const task of [
-        { ...uncertain, status: "running" as const },
-        { ...uncertain, status: "succeeded" as const },
-        { ...uncertain, stage: "任务失败", errorCode: "request_not_sent" },
-        { ...uncertain, providerRequestId: undefined },
-        { ...uncertain, type: "canvas_image" },
+        { ...uncertain, status: "running" as const, stage: "generating" },
+        { ...uncertain, status: "succeeded" as const, stage: "completed" },
+        { ...uncertain, outcome: { phase: "failed", regenerate: "allowed", reason: "not_charged" } as const },
     ]) {
-        const queryFailedVideoProviderTask = mock(async () => ({ task, providerStatus: "running", recovered: false }));
+        const recoverTask = mock(async () => task);
         expect(await recoverCanvasGenerationTask(task.id, new AbortController().signal, {
-            queryGenerationTask: async () => task, queryFailedVideoProviderTask,
+            queryGenerationTask: async () => task, recoverTask,
         })).toBe(task);
-        expect(queryFailedVideoProviderTask).not.toHaveBeenCalled();
+        expect(recoverTask).not.toHaveBeenCalled();
+    }
+});
+
+test("retrievable outcomes delegate recovery without guessing from stale status or missing upstream IDs", async () => {
+    for (const task of [
+        { ...uncertain, providerRequestId: undefined },
+        { ...uncertain, status: "succeeded" as const, stage: "completed" },
+    ]) {
+        const recoverTask = mock(async () => task);
+        const result = await recoverCanvasGenerationTask(task.id, new AbortController().signal, {
+            queryGenerationTask: async () => ({ ...task, outcome: { phase: "retrievable", regenerate: "blocked", reason: "delivery_pending" } }), recoverTask,
+        });
+        expect(result).toBe(task);
+        expect(recoverTask).toHaveBeenCalledTimes(1);
     }
 });
 
 test("pending upstream result remains uncertain and never becomes a new submission", async () => {
     const result = await recoverCanvasGenerationTask(uncertain.id, new AbortController().signal, {
         queryGenerationTask: async () => uncertain,
-        queryFailedVideoProviderTask: async () => ({ task: uncertain, providerStatus: "running", recovered: false }),
+        recoverTask: async () => uncertain,
     });
     expect(result.stage).toBe("submission_unknown");
     expect(result.id).toBe(uncertain.id);
@@ -47,18 +59,18 @@ test("pending upstream result remains uncertain and never becomes a new submissi
 
 test("cancellation after the initial query prevents upstream recovery", async () => {
     const controller = new AbortController();
-    const queryFailedVideoProviderTask = mock(async () => ({ task: uncertain, providerStatus: "running", recovered: false }));
+    const recoverTask = mock(async () => uncertain);
     await expect(recoverCanvasGenerationTask(uncertain.id, controller.signal, {
-        queryGenerationTask: async () => { controller.abort(); return uncertain; }, queryFailedVideoProviderTask,
+        queryGenerationTask: async () => { controller.abort(); return uncertain; }, recoverTask,
     })).rejects.toThrow();
-    expect(queryFailedVideoProviderTask).not.toHaveBeenCalled();
+    expect(recoverTask).not.toHaveBeenCalled();
 });
 
 test("mismatched task receipts cannot replace the original node's task", async () => {
     for (const mismatchAt of ["query", "recovery"]) {
         await expect(recoverCanvasGenerationTask(uncertain.id, new AbortController().signal, {
             queryGenerationTask: async () => mismatchAt === "query" ? { ...uncertain, id: "other" } : uncertain,
-            queryFailedVideoProviderTask: async () => ({ task: { ...uncertain, id: "other" }, providerStatus: "succeeded", recovered: true }),
+            recoverTask: async () => ({ ...uncertain, id: "other" }),
         })).rejects.toThrow("回执不匹配");
     }
 });
@@ -68,9 +80,9 @@ test("account changes discard recovery replies", async () => {
     try {
         await expect(recoverCanvasGenerationTask(uncertain.id, new AbortController().signal, {
             queryGenerationTask: async () => uncertain,
-            queryFailedVideoProviderTask: async () => {
+            recoverTask: async () => {
                 setActiveUserScope("other-recovery-owner");
-                return { task: { ...uncertain, status: "succeeded" as const }, providerStatus: "succeeded", recovered: true };
+                return { ...uncertain, status: "succeeded" as const };
             },
         })).rejects.toBeInstanceOf(UserScopeAbandonedError);
     } finally {

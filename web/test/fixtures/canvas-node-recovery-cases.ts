@@ -25,7 +25,12 @@ const shots = resolve(testDir, "../../output/canvas-node-recovery");
 
 function task(): GenerationTask {
     const status = state === "running" ? "running" : state === "succeeded" || state === "paused" ? "succeeded" : "failed";
-    return { id: "original-task", type: "canvas_video", projectId: "original-canvas", status, stage: state === "running" ? "generating" : state === "succeeded" ? "completed" : state === "paused" ? "delivery_paused" : state === "failed" ? "任务失败" : "submission_unknown", errorCode: state === "failed" ? "request_not_sent" : status === "failed" ? "submission_uncertain" : undefined, error: state === "failed" ? "未能连接服务，本次请求尚未提交。请检查网络或代理后重试。" : undefined, providerRequestId: "provider-original", progress: status === "running" ? 42 : status === "succeeded" ? 100 : 0, attempts: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const outcome: GenerationTask["outcome"] = state === "failed"
+        ? { phase: "failed", regenerate: "allowed", reason: "not_charged" }
+        : state === "running" ? { phase: "running", regenerate: "blocked", reason: "task_running" }
+        : state === "succeeded" ? { phase: "ready", regenerate: "allowed", reason: "result_ready" }
+        : { phase: "retrievable", regenerate: "blocked", reason: state === "paused" ? "delivery_pending" : "submission_unknown" };
+    return { id: "original-task", type: "canvas_video", projectId: "original-canvas", status, outcome, stage: state === "running" ? "generating" : state === "succeeded" ? "completed" : state === "paused" ? "delivery_paused" : state === "failed" ? "任务失败" : "submission_unknown", errorCode: state === "failed" ? "request_not_sent" : status === "failed" ? "submission_uncertain" : undefined, error: state === "failed" ? "未能连接服务，本次请求尚未提交。请检查网络或代理后重试。" : undefined, providerRequestId: "provider-original", progress: status === "running" ? 42 : status === "succeeded" ? 100 : 0, attempts: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 }
 const snapshot = () => page.evaluate(() => (window as any).__recovery.snapshot());
 async function waitStatus(status: string) {
@@ -35,8 +40,10 @@ async function screenshot(name: string) {
     await page.screenshot({ path: resolve(shots, name), fullPage: true, animations: "disabled" });
 }
 async function open(theme = "light") {
-    await page.goto(`${origin}/__recovery?theme=${theme}`, { waitUntil: "domcontentloaded" });
-    await page.getByTestId("harness").waitFor();
+    await page.goto(`${origin}/__recovery?theme=${theme}`, { waitUntil: "domcontentloaded", timeout: 90_000 });
+    await page.getByTestId("harness").waitFor().catch(async error => {
+        throw new Error(`验收页面未就绪：${JSON.stringify(errors)}；${(await page.locator("body").innerText()).slice(0, 1000)}`, { cause: error });
+    });
     await page.getByRole("button", { name: "查询并恢复" }).waitFor();
 }
 
@@ -48,6 +55,7 @@ beforeAll(async () => {
     await new Promise<void>(resolve => reservation.close(() => resolve()));
     server = await createServer({
         configFile: resolve(testDir, "../vite.config.ts"), logLevel: "error",
+        optimizeDeps: { entries: [resolve(testDir, "fixtures/canvas-node-recovery-harness.tsx")] },
         server: { host: "127.0.0.1", port, strictPort: true, open: false },
         plugins: [{ name: "recovery-acceptance-page", configureServer(vite) {
             vite.middlewares.use(async (request, response, next) => {
@@ -88,12 +96,13 @@ beforeEach(async () => {
             if (state === "query-error") return json(null, 503);
             return json({ ...task(), ...(state === "missing-upstream" ? { providerRequestId: undefined } : {}) });
         }
-        if (url.pathname === "/api/tasks/original-task/query-provider") {
+        if (url.pathname === "/api/tasks/original-task/recover") {
             providerQueries++;
             if (gate) await gate;
             if (state === "provider-error") return json(null, 409);
-            if (state === "provider-success") return json({ task: { ...task(), status: "succeeded", stage: "completed", errorCode: undefined }, recovered: true, providerStatus: "succeeded" });
-            return json({ task: task(), recovered: state === "succeeded", providerStatus: state === "succeeded" ? "succeeded" : "running" });
+            if (state === "paused") state = "succeeded";
+            if (state === "provider-success") { state = "succeeded"; return json(task()); }
+            return json(task());
         }
         if (url.pathname === "/api/tasks/original-task/retry") {
             retries++;
@@ -228,7 +237,7 @@ test("provider query conflicts and missing upstream IDs preserve uncertainty", {
         await page.getByRole("button", { name: "查询并恢复" }).click();
         await page.evaluate(async () => { await (window as any).__recoveryPending; });
         await waitStatus("error");
-        assert.equal(providerQueries - before, next === "provider-error" ? 1 : 0);
+        assert.equal(providerQueries - before, 1);
         assert.equal(await page.getByRole("button", { name: "查询并恢复" }).isVisible(), true);
         assert.equal(await page.getByRole("button", { name: "重新生成", exact: true }).count(), 0);
         assert.equal(retries, 0); assert.equal(creates, 0);
@@ -241,7 +250,7 @@ test("paused delivery resumes retrieval of the same task", { timeout: 120_000 },
     await open();
     await page.getByRole("button", { name: "查询并恢复" }).click();
     await waitStatus("success");
-    assert.equal(retries, 1); assert.equal(creates, 0);
+    assert.equal(providerQueries, 1); assert.equal(retries, 0); assert.equal(creates, 0);
     assert.equal((await snapshot()).nodes[0].metadata.taskId, "original-task");
 });
 

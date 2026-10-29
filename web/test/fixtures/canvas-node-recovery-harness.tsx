@@ -43,7 +43,7 @@ function Harness() {
         if (owns && !owns()) return;
         if (applyFails) throw Object.assign(new Error("生成结果已保留，画布回写失败，请继续取回"), { code: "result_apply_failed" });
         setApplies(value => value + 1);
-        setNodes(current => current.map(node => node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...generationTaskMetadata(task), status: "success", content: "/mock-result.mp4", errorDetails: undefined, generationErrorCode: undefined, resourceReloadAvailable: undefined, hasAudio: false } } : node));
+        setNodes(current => current.map(node => node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...generationTaskMetadata(task), status: "success", content: "/mock-result.mp4", errorDetails: undefined, generationErrorCode: undefined, hasAudio: false } } : node));
     };
     const { reloadCanvasNodeResource } = useCanvasResourceHandoff({
         projectId: canvasId, linkedProjectId: "", projectLoaded: false, assets: [], assetsHydrated: false, nodesRef,

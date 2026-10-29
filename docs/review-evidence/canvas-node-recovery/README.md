@@ -8,7 +8,7 @@
 
 ## 结果
 
-- 36 项专项检查通过，覆盖服务查询、状态映射、恢复 Hook、原视频重试及失败操作。
+- 同步主分支后 42 项专项检查通过，覆盖服务查询、状态映射、恢复 Hook、原视频重试、失败操作与统一 `task.outcome` 合同。
 - 10 组真实浏览器用例通过，包含四种归属变化子场景；浏览器为 Windows Edge，通过 Node 驱动 Playwright。
 - 补充 3 组暗色画布流转检查通过：查询与生成状态区分、恢复后播放、确认失败后的键盘重试，以及查询/回写失败后的恢复。`dark-*.png` 直接截取画布区域，不含测试外壳标题与说明。
 - `bun run build`（含 TypeScript 检查）、`bun run lint` 与 `git diff --check` 通过。构建保留大 chunk 提示，不作为本次改动引入的故障。
@@ -22,7 +22,7 @@
 | 结果回写失败 | 保留「继续取回」，再次取回不重新生成 |
 | 重复点击与归属变化 | 合并同节点重复操作；切换画布、切换账号、节点换任务、删除节点后不接收旧响应 |
 | 上游已成功 | 查询现有上游任务并应用结果，不重试生成 |
-| 上游查询冲突或缺上游 ID | 保留不确定性，不把查询失败当作未提交 |
+| 上游查询冲突或缺上游 ID | 由免费 `/recover` 判断能否恢复，不把查询失败当作未提交 |
 | 取回暂停 | 恢复同任务交付，不创建新生成任务 |
 | 原任务详情 | 点击详情入口不触发恢复或生成 |
 
@@ -37,7 +37,7 @@
 ```sh
 cd web
 bun install --frozen-lockfile
-bun test test/canvas-generation-recovery.test.ts test/canvas-node-generation-recovery.test.tsx test/canvas-node-recovery-flow.test.tsx test/canvas-video-retry.test.ts test/canvas-generation-failure.test.ts test/generation-failure-actions.test.tsx
+bun test test/canvas-generation-recovery.test.ts test/canvas-node-generation-recovery.test.tsx test/canvas-node-recovery-flow.test.tsx test/canvas-video-retry.test.ts test/canvas-generation-failure.test.ts test/generation-failure-actions.test.tsx test/task-outcome.test.ts
 bun test test/canvas-node-recovery.browser.test.ts
 bun run build
 bun run lint

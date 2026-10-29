@@ -3,7 +3,8 @@ import { createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CanvasNodeContent } from "../src/components/canvas/canvas-node-content";
 import { canvasThemes } from "../src/lib/canvas-theme";
-import { canvasGenerationRetryBlocked, canvasGenerationTaskNodes } from "../src/pages/canvas/canvas-generation-failure";
+import { canvasGenerationTaskNodes } from "../src/pages/canvas/canvas-generation-failure";
+import { isNodeRegenerateBlocked } from "../src/lib/task-outcome";
 import type { GenerationTask } from "../src/services/api/task-center";
 import { CanvasNodeType, type CanvasNodeData } from "../src/types/canvas";
 
@@ -26,7 +27,7 @@ test("uncertain node offers in-place recovery while keeping paid regeneration bl
     expect(html).toContain("查询并恢复");
     expect(html).toContain("查看原任务");
     expect(html).not.toContain(">重新生成<");
-    expect(canvasGenerationRetryBlocked(node.metadata)).toBe(true);
+    expect(isNodeRegenerateBlocked(node.metadata)).toBe(true);
 });
 
 test("confirmed unsent failure unlocks retry on the same node without changing its position", () => {
@@ -35,13 +36,13 @@ test("confirmed unsent failure unlocks retry on the same node without changing i
     expect(updated).toHaveLength(1);
     expect(updated[0].id).toBe(node.id);
     expect(updated[0].position).toEqual(node.position);
-    expect(canvasGenerationRetryBlocked(updated[0].metadata)).toBe(false);
+    expect(isNodeRegenerateBlocked(updated[0].metadata)).toBe(false);
     expect(render(updated[0])).toContain("重新生成");
     expect(render(updated[0])).not.toContain("查询并恢复");
 });
 
 test("saved results keep their recovery action and missing task IDs never offer an unusable query", () => {
-    expect(render({ ...node, metadata: { ...node.metadata, resourceReloadAvailable: true } })).toContain("继续取回");
+    expect(render({ ...node, metadata: { ...node.metadata, taskOutcome: { phase: "retrievable", regenerate: "blocked", reason: "delivery_pending" } } })).toContain("继续取回");
     expect(render({ ...node, metadata: { ...node.metadata, taskId: undefined } })).not.toContain("查询并恢复");
     expect(render(node, false)).not.toContain("查询并恢复");
 });

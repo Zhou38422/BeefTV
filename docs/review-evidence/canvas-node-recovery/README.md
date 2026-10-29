@@ -10,6 +10,7 @@
 
 - 36 项专项检查通过，覆盖服务查询、状态映射、恢复 Hook、原视频重试及失败操作。
 - 10 组真实浏览器用例通过，包含四种归属变化子场景；浏览器为 Windows Edge，通过 Node 驱动 Playwright。
+- 补充 3 组暗色画布流转检查通过：查询与生成状态区分、恢复后播放、确认失败后的键盘重试，以及查询/回写失败后的恢复。`dark-*.png` 直接截取画布区域，不含测试外壳标题与说明。
 - `bun run build`（含 TypeScript 检查）、`bun run lint` 与 `git diff --check` 通过。构建保留大 chunk 提示，不作为本次改动引入的故障。
 
 | 浏览器用例 | 已核对行为 |
@@ -46,7 +47,11 @@ bun run lint
 
 ## 截图
 
-截图由测试生成到仓库根目录的 `output/canvas-node-recovery/`，该目录由 Git 忽略；不把截图生成目录加入源码提交。PR 可上传对应图片作为评审附件。
+截图由测试生成到仓库根目录的 `output/canvas-node-recovery/`，该目录由 Git 忽略。以下三张画布截图随评审记录保存，完整截图可运行上述用例生成。
+
+| 待确认 | 查询原任务 | 恢复成功 |
+| --- | --- | --- |
+| ![待确认](dark-01-uncertain.png) | ![查询原任务](dark-02-querying.png) | ![恢复成功](dark-04-recovered.png) |
 
 | 文件 | 状态 |
 | --- | --- |
@@ -60,3 +65,11 @@ bun run lint
 | `08-query-failed-light.png` | 查询失败后恢复操作入口 |
 | `09-apply-failed-light.png` | 已有结果等待继续取回 |
 | `10-original-task-details.png` | 原任务详情入口测试桩 |
+| `dark-01-uncertain.png` | 暗色待确认，仅画布区域 |
+| `dark-02-querying.png` | 暗色查询原任务 |
+| `dark-03-generating.png` | 暗色原任务继续生成 |
+| `dark-04-recovered.png` | 暗色恢复成功并加载视频 |
+| `dark-05-confirmed-failure.png` | 暗色确认失败，可原位重试 |
+| `dark-06-retrying.png` | 暗色用户主动重试后生成中 |
+| `dark-07-query-failed.png` | 暗色查询失败，保留查询入口 |
+| `dark-08-apply-failed.png` | 暗色结果回写失败，可继续取回 |

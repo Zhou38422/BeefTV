@@ -252,3 +252,71 @@ test("original task details remain accessible without initiating recovery", { ti
     await screenshot("10-original-task-details.png");
     assert.equal(reads, 0); assert.equal(providerQueries, 0); assert.equal(creates, 0);
 });
+
+async function darkScreenshot(name: string) {
+    const canvas = page.getByTestId("canvas");
+    assert.equal(await page.locator("html.dark").count(), 1);
+    await canvas.screenshot({ path: resolve(shots, `dark-${name}.png`), animations: "disabled" });
+}
+
+test("dark canvas recovery flow has distinct querying, generation and playable success states", { timeout: 120_000 }, async () => {
+    await open("dark");
+    await darkScreenshot("01-uncertain");
+    gate = new Promise(resolve => { release = resolve; });
+    await page.getByRole("button", { name: "查询并恢复" }).click();
+    await page.getByRole("status", { name: "正在查询原任务", exact: true }).waitFor();
+    await darkScreenshot("02-querying");
+    assert.equal(await page.getByRole("button", { name: "重新生成", exact: true }).count(), 0);
+    state = "running"; release!(); gate = undefined;
+    await page.waitForFunction(() => (window as any).__recovery.snapshot().nodes[0].metadata.taskStage === "generating");
+    await page.getByText("42%", { exact: true }).waitFor();
+    await darkScreenshot("03-generating");
+    state = "succeeded";
+    await waitStatus("success");
+    await page.getByRole("button", { name: "播放 镜头 01 · 雨夜街道", exact: true }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll("video")].some(video => video.readyState >= 2));
+    await page.evaluate(() => document.querySelector("video")?.pause());
+    await darkScreenshot("04-recovered");
+    const current = await snapshot();
+    assert.equal(current.nodes.length, 1);
+    assert.equal(current.nodes[0].id, "original-node");
+    assert.deepEqual(current.nodes[0].position, { x: 0, y: 0 });
+    assert.equal(current.applies, 1); assert.equal(retries, 0); assert.equal(creates, 0);
+});
+
+test("dark canvas allows an explicit same-node retry only after a confirmed unsent failure", { timeout: 120_000 }, async () => {
+    state = "failed";
+    await open("dark");
+    await page.getByRole("button", { name: "查询并恢复" }).click();
+    await page.getByRole("button", { name: "重新生成", exact: true }).waitFor();
+    await darkScreenshot("05-confirmed-failure");
+    assert.equal(retries, 0);
+    await page.getByRole("button", { name: "重新生成", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await waitStatus("loading");
+    await darkScreenshot("06-retrying");
+    state = "succeeded";
+    await waitStatus("success");
+    assert.equal(retries, 1); assert.equal(creates, 0);
+    assert.equal((await snapshot()).nodes[0].id, "original-node");
+});
+
+test("dark canvas query and result-application failures keep their respective recovery actions", { timeout: 120_000 }, async () => {
+    state = "query-error";
+    await open("dark");
+    await page.getByRole("button", { name: "查询并恢复" }).click();
+    await page.evaluate(async () => { await (window as any).__recoveryPending; });
+    await waitStatus("error");
+    await darkScreenshot("07-query-failed");
+    assert.equal(await page.getByRole("button", { name: "查询并恢复" }).isVisible(), true);
+    assert.equal((await snapshot()).nodes[0].metadata.taskStage, "submission_unknown");
+    state = "succeeded";
+    await page.evaluate(() => (window as any).__recovery.setApplyFails(true));
+    await page.getByRole("button", { name: "查询并恢复" }).click();
+    await page.getByRole("button", { name: "继续取回", exact: true }).waitFor();
+    await darkScreenshot("08-apply-failed");
+    await page.evaluate(() => (window as any).__recovery.setApplyFails(false));
+    await page.getByRole("button", { name: "继续取回", exact: true }).click();
+    await waitStatus("success");
+    assert.equal(retries, 0); assert.equal(creates, 0);
+});
